@@ -43,5 +43,6 @@ recon*.nii
 .hydra/
 outputs/
 
-.recon
+.recon*
 convert_dat_to_npy.py
+.vscode
