@@ -290,8 +290,7 @@ def dc_adjoint(obs_file: str | np.ndarray, traj_file: str, coil_compress: str | 
         target_shape[2]/smaps.shape[2],
         target_shape[3]/smaps.shape[3]
     )
-    log.info("Resizing smaps from {smaps.shape} to {target_shape}")
-    smaps_resized = zoom(smaps, zoom_factors, order=1)
+
     log.info("New smaps shape: {smaps.shape}")
     if orc and b0_map_file:
         log.info("Applying B0 off-resonance correction with MRI Fourier Operator")
@@ -301,17 +300,21 @@ def dc_adjoint(obs_file: str | np.ndarray, traj_file: str, coil_compress: str | 
         target_shape = (384, 384, 208)
         zoom_factors = tuple(t/c for t, c in zip(target_shape, current_shape))
         b0_map_interp = zoom(b0_map, zoom_factors, order=1)
+        b0_map_aligned = np.flip(b0_map_interp, (0, 2))
         dwell_time = traj_reader.keywords['raster_time'] / \
             data_header["oversampling_factor"]
         # Convert milliseconds to seconds
         TE = 20e-3
-        obs_time = 20e-3
+        obs_time = 20.48e-3
+        # kspace points acquired per shot  : 40642560 : kspace_loc.shape[0]and we have 3969 shots so : kspace_loc.shape[0]/n_shots
+        n_pts = 10240
+        n_shots = 3969  # 40642560/2048/5
         start_time = TE - (obs_time / 2)
         end_time = TE + (obs_time / 2)
 
-        # Linearly distribute readout times
-        readout_time = np.linspace(
-            start_time, end_time, num=kspace_loc.shape[0])
+        readout_time_single = np.linspace(start_time, end_time, num=n_pts)
+        readout_time = np.tile(readout_time_single, (n_shots, 1))
+        readout_time = readout_time.reshape(-1, 1)
 
         # Ensure correct shape (column vector)
         readout_time = readout_time[:, np.newaxis]
@@ -320,16 +323,16 @@ def dc_adjoint(obs_file: str | np.ndarray, traj_file: str, coil_compress: str | 
             kspace_data = kspace_data.T
         nufft = get_operator("gpunufft")(
             samples=2 * np.pi * kspace_loc,
-            # shape=(64, 64, 36),
             shape=(384, 384, 208),
             n_coils=32,
+            density=True,
             smaps=smaps,
         )
         if len(readout_time.shape) == 1:
             readout_time = readout_time[:, np.newaxis]
 
         orc_nufft = MRIFourierCorrected(
-            nufft, b0_map=b0_map_interp, readout_time=readout_time
+            nufft, b0_map=b0_map_aligned, readout_time=readout_time, backend='cpu'
         )
 
         log.info("Getting the DC adjoint")
