@@ -124,31 +124,60 @@ def dc_adjoint(obs_file: str | np.ndarray, traj_file: str, coil_compress: str | 
                obs_reader, traj_reader, fourier, grappa_recon=None, output_filename: str = "dc_adjoint.nii",
                return_data=False, orc: bool = False, b0_map_file: str = None):
     """
-    Reconstructs an image using the adjoint operator with optional B0 off-resonance correction.
+    Reconstructs an image using the adjoint operator.
+
+    Parameters
+    ----------
+    obs_file : str or np.ndarray
+        Path to the observed kspace data file.
+    traj_file : str
+        Path to the trajectory file or the folder holding trajectory file.
+        If folder is provided, the trajectory name is picked up and the data header 
+        and the trajectory is obtained by searching recursively.
+    obs_reader : callable
+        A function that reads the observed data file and returns
+        the raw data and data header.
+    traj_reader : callable
+        A function that reads the trajectory file and returns the trajectory
+        data and parameters.
+    fourier: Callable
+        A Callable returning a Fourier Operator
+    coil_compress : str|int, optional default -1
+        The number of singular values to keep in the coil compression.
+        If -1, coil compression is not applied 
+    output_filename: str, optional default 'dc_adjoint.pkl'
+        The output file name with the right extension.
+        It can be:
+        1) *.pkl / *.mat: Holds the reconstructed results saved in dictionary as `recon`.
+        2) *.nii : NIFTI file holding the reconstructed images.
+    grappa_af: Union[list[int], tuple[int, ...]], optional default 1
+        The acceleration factor for the GRAPPA reconstruction.
+
+    Returns
+    -------
+    None
+        The reconstructed image is saved as 'dc_adjoint.pkl' file.
     """
-    preprocessed_file = 'preprocessed_data.pkl'
+    import os
+    import pickle as pkl
+
+    reprocessed_file = 'preprocessed_data.pkl'
     smaps_file = 'smaps.pkl'
 
-    if os.path.exists(preprocessed_file):
-        with open(preprocessed_file, 'rb') as f:
-            preprocessed_data = pickle.load(f)
+    if os.path.exists(reprocessed_file):
+        with open(reprocessed_file, 'rb') as f:
+            preprocessed_data = pkl.load(f)
         kspace_data = preprocessed_data['kspace_data']
         kspace_loc = preprocessed_data['kspace_loc']
         data_header = preprocessed_data['data_header']
         traj_params = preprocessed_data['traj_params']
-        shots = preprocessed_data['shots']
         log.info("Loaded preprocessed data from preprocessed_data.pkl")
     else:
-        # Step 1: Read Raw K-Space Data and Data Header
         raw_data, data_header = obs_reader(obs_file)
-
-        # Step 2: Handle Slice Number If Present
         if obs_reader.keywords['slice_num'] is not None:
             data_header['slice_num'] = obs_reader.keywords['slice_num']
-
         log.info(f"Data Header: {data_header}")
 
-        # Step 3: Validate Trajectory File (Make Sure It Matches the Data)
         try:
             if not os.path.isdir(traj_file) and data_header["trajectory_name"] != os.path.basename(traj_file):
                 log.warn(
@@ -156,7 +185,6 @@ def dc_adjoint(obs_file: str | np.ndarray, traj_file: str, coil_compress: str | 
         except KeyError:
             log.warn("Trajectory name not found in data header, Skipped Validation")
 
-        # Step 4: Find the Correct Trajectory File If a Folder is Given
         if os.path.isdir(traj_file):
             search_folder = traj_file
             found_trajs = glob.glob(os.path.join(
@@ -169,43 +197,33 @@ def dc_adjoint(obs_file: str | np.ndarray, traj_file: str, coil_compress: str | 
                 log.warn("More than one file found, choosing first one")
             traj_file = found_trajs[0]
         elif not os.path.exists(traj_file):
-            log.error("Trajectory not found! Exiting")
+            log.error("Trajectory not found! exiting")
             exit(1)
 
         log.debug(f"Loading trajectory from {traj_file}")
-
-        # Step 5: Load Trajectory Data and Parameters
         shots, traj_params = traj_reader(
             traj_file,
             dwell_time=traj_reader.keywords['raster_time'] /
             data_header["oversampling_factor"],
         )
 
-        # Step 6: Ensure Image Sizes are Even
         traj_params['img_size'] = np.asarray([
-            size + 1 if size % 2 else size for size in traj_params['img_size']
+            size + 1 if size % 2 else size
+            for size in traj_params['img_size']
         ])
         log.info(f"Trajectory Parameters: {traj_params}")
 
-        # Step 7: Normalize Phase Shifts
         data_header["shifts"] = data_header['shifts'][:traj_params["dimension"]]
         normalized_shifts = (
-            np.array(data_header["shifts"])
-            / np.array(traj_params["FOV"])
-            * np.array(traj_params["img_size"])
-            / 1000
+            np.array(data_header["shifts"]) / np.array(traj_params["FOV"]
+                                                       ) * np.array(traj_params["img_size"]) / 1000
         )
 
-        # Step 8: Convert Raw Data into k-Space Format
         kspace_data = np.squeeze(raw_data).astype(np.complex64)
         kspace_loc = shots.reshape(-1,
                                    traj_params["dimension"]).astype(np.float32)
-
-        # Step 9: Remove Extra k-Space Samples
         kspace_data = remove_extra_kspace_samples(kspace_data, shots.shape[1])
         kspace_data = kspace_data.reshape(kspace_data.shape[0], -1)
-
-        # Step 10: Apply Phase Shift Corrections
         log.info(
             f"Phase shifting raw data for Normalized shifts: {normalized_shifts}")
         kspace_data = add_phase_to_kspace_with_shifts(
@@ -213,7 +231,6 @@ def dc_adjoint(obs_file: str | np.ndarray, traj_file: str, coil_compress: str | 
                                             traj_params["dimension"]), normalized_shifts
         )
 
-        # Step 11: GRAPPA Reconstruction (If Enabled)
         try:
             af_string = data_header['trajectory_name'].split('_G')[1].split('_')[
                 0].split('x')
@@ -226,6 +243,7 @@ def dc_adjoint(obs_file: str | np.ndarray, traj_file: str, coil_compress: str | 
         except:
             grappa_recon.keywords['af'] = (1, )
             grappa_recon.keywords['delta'] = 0
+
         if grappa_recon is not None and np.prod(grappa_recon.keywords['af']) > 1:
             log.info("Performing GRAPPA Reconstruction: AF: %s", af_string)
             log.info("GRAPPA AF: %s", grappa_recon.keywords['af'])
@@ -234,34 +252,8 @@ def dc_adjoint(obs_file: str | np.ndarray, traj_file: str, coil_compress: str | 
                 kspace_data,
                 traj_params,
                 grappa_recon,
-                acs=data_header["acs"],  # Pass ACS if read in data (external)
+                acs=data_header.get("acs"),
             )
-        # Step 12: Save Processed Data to Pickle for Future Use
-        preprocessed_data = {
-            'kspace_data': kspace_data,
-            'kspace_loc': kspace_loc,
-            'data_header': data_header,
-            'traj_params': traj_params,
-            'shots': shots
-        }
-        with open(preprocessed_file, 'wb') as f:
-            pickle.dump(preprocessed_data, f)
-        log.info("Saved preprocessed data to preprocessed_data.pkl")
-
-    required_vars = {'kspace_data', 'kspace_loc',
-                     'data_header', 'traj_params', 'shots'}
-    if not all(var in preprocessed_data for var in required_vars):
-        log.error(
-            f"Missing required variables in preprocessed_data: {required_vars - set(preprocessed_data.keys())}")
-        raise ValueError("Incomplete preprocessed data")
-
-    smaps = None
-    if os.path.exists(smaps_file):
-        with open(smaps_file, 'rb') as f:
-            smaps = pickle.load(f)
-        log.info("Loaded smaps from smaps.pkl")
-    else:
-        log.warning("WARNING: smaps is None, computing manually")
 
         if coil_compress != -1:
             log.info("Compressing coils")
@@ -270,9 +262,10 @@ def dc_adjoint(obs_file: str | np.ndarray, traj_file: str, coil_compress: str | 
                 k_svd=coil_compress,
                 coil_axis=0
             )).astype(np.complex64)
+
         if kspace_loc.max() > 0.5 or kspace_loc.min() < 0.5:
             log.warn(
-                f"K-space locations are above the unity range, discarding the outlier data")
+                "K-space locations are above the unity range, discarding the outlier data")
             if data_header["type"] == "retro_recon":
                 kspace_loc = discard_frequency_outliers(kspace_loc)
                 kspace_data = np.squeeze(raw_data)
@@ -280,58 +273,57 @@ def dc_adjoint(obs_file: str | np.ndarray, traj_file: str, coil_compress: str | 
                 kspace_loc, kspace_data = discard_frequency_outliers(
                     kspace_loc, kspace_data)
 
+        with open(reprocessed_file, 'wb') as f:
+            pkl.dump({
+                'kspace_data': kspace_data,
+                'kspace_loc': kspace_loc,
+                'data_header': data_header,
+                'traj_params': traj_params,
+            }, f)
+        log.info("Saved preprocessed data to preprocessed_data.pkl")
+
+    if os.path.exists(smaps_file):
+        with open(smaps_file, 'rb') as f:
+            smaps = pkl.load(f)
+        log.info("Loaded smaps from smaps.pkl")
+    else:
         fourier.keywords['smaps'] = partial(
             fourier.keywords['smaps'],
             kspace_data=kspace_data,
         )
-
-        log.info(" Computing smaps using low_frequency method")
-        smaps, sos = low_frequency(
-            traj=kspace_loc,
-            shape=traj_params["img_size"],
-            kspace_data=kspace_data,
-            backend="gpunufft"
-        )
-
-        if smaps is None:
-            log.error("Failed to compute smaps")
-        with open(smaps_file, 'wb') as f:
-            pickle.dump(smaps, f)
-        log.info("Saved computed smaps to smaps.pkl")
-
         fourier_op = fourier(
             kspace_loc,
             traj_params["img_size"],
             n_coils=data_header["n_coils"] if coil_compress == -
             1 else coil_compress,
-            smaps=smaps,
         )
-        """
-        if debug > 0:
-            intermediate = {
-                'density_comp': fourier_op.impl.density,
-                'traj_params': traj_params,
-                'data_header': data_header,
-                'kspace_loc': kspace_loc,
-            }
-            save_data_hydra('smaps.nii', fourier_op.impl.smaps)
-            if coil_compress != -1:
-                intermediate['kspace_data'] = kspace_data
-            log.info("Saving Smaps and denisty_comp as intermediates")
-            pkl.dump(intermediate, open(
-                get_outdir_path('intermediate.pkl'), 'wb'))
-        
-        """
+        smaps = fourier_op.impl.smaps
+        with open(smaps_file, 'wb') as f:
+            pkl.dump(smaps, f)
+        log.info("Saved computed smaps to smaps.pkl")
 
-    target_shape = (32, 64, 64, 36)
-    zoom_factors = (
-        1,
-        target_shape[1]/smaps.shape[1],
-        target_shape[2]/smaps.shape[2],
-        target_shape[3]/smaps.shape[3]
+    fourier_op = fourier(
+        kspace_loc,
+        traj_params["img_size"],
+        n_coils=data_header["n_coils"] if coil_compress == -
+        1 else coil_compress,
+        smaps=smaps,
     )
 
-    log.info("New smaps shape: {smaps.shape}")
+    if debug > 0:
+        intermediate = {
+            'density_comp': fourier_op.impl.density,
+            'traj_params': traj_params,
+            'data_header': data_header,
+            'kspace_loc': kspace_loc,
+        }
+        save_data_hydra('smaps.nii', fourier_op.impl.smaps)
+        if coil_compress != -1:
+            intermediate['kspace_data'] = kspace_data
+        log.info("Saving Smaps and denisty_comp as intermediates")
+        pkl.dump(intermediate, open(get_outdir_path('intermediate.pkl'), 'wb'))
+
+    log.info("Getting the DC Adjoint")
     if orc and b0_map_file:
         log.info("Applying B0 off-resonance correction with MRI Fourier Operator")
         b0_map_nii = nib.load(b0_map_file)
@@ -341,25 +333,6 @@ def dc_adjoint(obs_file: str | np.ndarray, traj_file: str, coil_compress: str | 
         zoom_factors = tuple(t/c for t, c in zip(target_shape, current_shape))
         b0_map_interp = zoom(b0_map, zoom_factors, order=1)
         b0_map_aligned = np.flip(b0_map_interp, (0, 2))
-        dwell_time = traj_reader.keywords['raster_time'] / \
-            data_header["oversampling_factor"]
-        # Convert milliseconds to seconds
-        TE = 20e-3
-        obs_time = 20.48e-3
-        # kspace points acquired per shot  : 40642560 : kspace_loc.shape[0]and we have 3969 shots so : kspace_loc.shape[0]/n_shots
-        n_pts = 10240
-        n_shots = 3969  # 40642560/2048/5
-        start_time = TE - (obs_time / 2)
-        end_time = TE + (obs_time / 2)
-
-        readout_time_single = np.linspace(start_time, end_time, num=n_pts)
-        readout_time = np.tile(readout_time_single, (n_shots, 1))
-        readout_time = readout_time.reshape(-1, 1)
-        readout_time = readout_time[:kspace_loc.shape[0]]
-        readout_time = readout_time.squeeze()
-
-        if kspace_data.shape[0] == 32 and kspace_data.shape[1] == 40642525:
-            kspace_data = kspace_data.T
         nufft = get_operator("gpunufft")(
             samples=2 * np.pi * kspace_loc,
             shape=(384, 384, 208),
@@ -367,57 +340,34 @@ def dc_adjoint(obs_file: str | np.ndarray, traj_file: str, coil_compress: str | 
             density=True,
             smaps=smaps,
         )
-
+        TE = 20e-3
+        obs_time = 20.48e-3
+        n_pts = 10240
+        n_shots = 3969  # 40642560/2048/5
+        start_time = TE - (obs_time / 2)
+        end_time = TE + (obs_time / 2)
+        readout_time_single = np.linspace(start_time, end_time, num=n_pts)
+        readout_time = np.tile(readout_time_single, (n_shots, 1))
+        readout_time = readout_time.reshape(-1, 1)
+        readout_time = readout_time[:kspace_loc.shape[0]]
+        readout_time = readout_time.squeeze()
         orc_nufft = MRIFourierCorrected(
             nufft, b0_map=b0_map_aligned, readout_time=readout_time, backend='cpu'
         )
-
-        log.info("Getting the DC adjoint")
+        log.info("Getting the DC adjoint : ORC")
         dc_adjoint = orc_nufft.adj_op(kspace_data)
         dc_adjoint = np.squeeze(abs(dc_adjoint))
-        if len(dc_adjoint.shape) > 3:
-            log.info(
-                f"Reshaping dc_adjoint from {dc_adjoint.shape} to {traj_params['img_size']}")
-            dc_adjoint = dc_adjoint.reshape(traj_params["img_size"])
-        log.info("Saving DC Adjoint")
 
-        save_data_hydra(output_filename, dc_adjoint, data_header)
-        if return_data:
-            return dc_adjoint, (fourier_op, kspace_data, traj_params, data_header)
     else:
-
-        log.info("Getting the DC Adjoint")
-        fourier.keywords['smaps'] = partial(
-            fourier.keywords['smaps'],
-            kspace_data=kspace_data,
-        )
-        fourier_op = fourier(
-            kspace_loc,
-            traj_params["img_size"],
-            n_coils=data_header["n_coils"] if coil_compress == -
-            1 else coil_compress,
-        )
-        if debug > 0:
-            intermediate = {
-                'density_comp': fourier_op.impl.density,
-                'traj_params': traj_params,
-                'data_header': data_header,
-                'kspace_loc': kspace_loc,
-            }
-            save_data_hydra('smaps.nii', fourier_op.impl.smaps)
-            if coil_compress != -1:
-                intermediate['kspace_data'] = kspace_data
-            log.info("Saving Smaps and denisty_comp as intermediates")
-            pkl.dump(intermediate, open(
-                get_outdir_path('intermediate.pkl'), 'wb'))
         dc_adjoint = fourier_op.adj_op(kspace_data)
-        if not getattr(fourier_op, 'uses_sense', False):
+        if not fourier_op.impl.uses_sense:
             dc_adjoint = np.linalg.norm(dc_adjoint, axis=0)
 
-        log.info("Saving DC Adjoint")
-        save_data_hydra(output_filename, dc_adjoint, data_header)
-        if return_data:
-            return dc_adjoint, (fourier_op, kspace_data, traj_params, data_header)
+    log.info("Saving DC Adjoint")
+    data_header['traj_params'] = traj_params
+    save_data_hydra(output_filename, dc_adjoint, data_header)
+    if return_data:
+        return dc_adjoint, (fourier_op, kspace_data, traj_params, data_header)
 
 
 def recon(obs_file: str, traj_file: str, mu: float, num_iterations: int, coil_compress: str | int,
