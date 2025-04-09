@@ -281,6 +281,7 @@ def dc_adjoint(obs_file: str | np.ndarray, traj_file: str, coil_compress: str | 
                 'kspace_loc': kspace_loc,
                 'data_header': data_header,
                 'traj_params': traj_params,
+                'shots': shots,
             }, f)
         log.info("Saved preprocessed data to preprocessed_data.pkl")
 
@@ -345,8 +346,27 @@ def dc_adjoint(obs_file: str | np.ndarray, traj_file: str, coil_compress: str | 
             density=True,
             smaps=smaps,
         )
+        shots = preprocessed_data['shots']
         TE = 20e-3
         obs_time = 20.48e-3
+        """
+        nb_adc_samples = shots.shape[1]  # Number of k-space points per shot
+        n_shots = shots.shape[0]         # Number of shots
+        dwell_time = traj_reader.keywords['raster_time'] / \
+            data_header["oversampling_factor"]
+
+        # Time vector for a single shot
+        time_vec_single_shot = dwell_time * np.arange(nb_adc_samples)
+        echo_time = TE - (dwell_time * nb_adc_samples / 2)
+
+        # Shift time relative to echo center
+        readout_time_single = (time_vec_single_shot +
+                               echo_time).astype(np.float32)
+
+        # Tile across all shots
+        readout_time = np.tile(readout_time_single, (n_shots, 1))
+        readout_time = readout_time.reshape(-1)[:kspace_loc.shape[0]]
+        """
         n_pts = 10240
         n_shots = 3969  # 40642560/2048/5
         start_time = TE - (obs_time / 2)
