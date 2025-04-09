@@ -264,7 +264,9 @@ def dc_adjoint(obs_file: str | np.ndarray, traj_file: str, coil_compress: str | 
             )).astype(np.complex64)
 
         if kspace_loc.max() > 0.5 or kspace_loc.min() < 0.5:
-            log.warn(
+            kspace_loc[np.where(kspace_loc < -0.5)] = -0.5
+            kspace_loc[np.where(kspace_loc > 0.5)] = 0.5
+        """    log.warn(
                 "K-space locations are above the unity range, discarding the outlier data")
             if data_header["type"] == "retro_recon":
                 kspace_loc = discard_frequency_outliers(kspace_loc)
@@ -272,7 +274,7 @@ def dc_adjoint(obs_file: str | np.ndarray, traj_file: str, coil_compress: str | 
             else:
                 kspace_loc, kspace_data = discard_frequency_outliers(
                     kspace_loc, kspace_data)
-
+        """
         with open(reprocessed_file, 'wb') as f:
             pkl.dump({
                 'kspace_data': kspace_data,
@@ -328,6 +330,9 @@ def dc_adjoint(obs_file: str | np.ndarray, traj_file: str, coil_compress: str | 
         log.info("Applying B0 off-resonance correction with MRI Fourier Operator")
         b0_map_nii = nib.load(b0_map_file)
         b0_map = b0_map_nii.get_fdata().astype(np.float32)
+        # import scipy.io
+        # mat_data = scipy.io.loadmat('B0map_matlab.mat')
+        # b0_map = mat_data['B0map'].astype(np.float32)
         current_shape = b0_map.shape
         target_shape = (384, 384, 208)
         zoom_factors = tuple(t/c for t, c in zip(target_shape, current_shape))
@@ -352,7 +357,7 @@ def dc_adjoint(obs_file: str | np.ndarray, traj_file: str, coil_compress: str | 
         readout_time = readout_time[:kspace_loc.shape[0]]
         readout_time = readout_time.squeeze()
         orc_nufft = MRIFourierCorrected(
-            nufft, b0_map=b0_map_aligned, readout_time=readout_time, backend='cpu'
+            nufft, b0_map=b0_map_aligned, readout_time=readout_time, backend='cpu', mask=b0_map_aligned != 0
         )
         log.info("Getting the DC adjoint : ORC")
         dc_adjoint = orc_nufft.adj_op(kspace_data)
