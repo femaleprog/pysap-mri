@@ -3,6 +3,8 @@ from hydra_zen import store, zen
 from mri.io.output import save_data
 from mri.cli.utils import raw_config, traj_config, setup_hydra_config, get_outdir_path
 from mri.operators.fourier.utils import discard_frequency_outliers
+from mri.operators.fourier.utils import estimate_density_compensation
+from mri.operators.fourier.orc_wrapper import ORCFFTWrapper
 from mrinufft.io.utils import add_phase_to_kspace_with_shifts, remove_extra_kspace_samples
 from pymrt.recipes.coils import compress_svd
 from mri.reconstructors import SelfCalibrationReconstructor
@@ -293,6 +295,7 @@ def dc_adjoint(obs_file: str | np.ndarray, traj_file: str, coil_compress: str | 
             fourier.keywords['smaps'],
             kspace_data=kspace_data,
         )
+
         fourier_op = fourier(
             kspace_loc,
             traj_params["img_size"],
@@ -345,6 +348,7 @@ def dc_adjoint(obs_file: str | np.ndarray, traj_file: str, coil_compress: str | 
             density=True,
             smaps=smaps,
         )
+
         TE = 20e-3
         obs_time = 20.48e-3
         n_pts = 10240
@@ -356,11 +360,14 @@ def dc_adjoint(obs_file: str | np.ndarray, traj_file: str, coil_compress: str | 
         readout_time = readout_time.reshape(-1, 1)
         readout_time = readout_time[:kspace_loc.shape[0]]
         readout_time = readout_time.squeeze()
-        orc_nufft = MRIFourierCorrected(
-            nufft, b0_map=b0_map_aligned, readout_time=readout_time, backend='cpu', mask=b0_map_aligned != 0
+        orc_fft = ORCFFTWrapper(
+            nufft,
+            field_map=b0_map_aligned,
+            time_vec=readout_time,
+            mask=b0_map_aligned != 0
         )
         log.info("Getting the DC adjoint : ORC")
-        dc_adjoint = orc_nufft.adj_op(kspace_data)
+        dc_adjoint = orc_fft.adj_op(kspace_data)
         dc_adjoint = np.squeeze(abs(dc_adjoint))
 
     else:
