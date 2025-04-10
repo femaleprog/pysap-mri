@@ -352,6 +352,13 @@ def dc_adjoint(obs_file: str | np.ndarray, traj_file: str, coil_compress: str | 
         TE = 20e-3
         obs_time = 20.48e-3
         n_pts = 10240
+        n_shots = kspace_loc[0]
+        dwell_time = traj_reader.keywords['raster_time'] / \
+            data_header["oversampling_factor"]
+        time_vec_single = dwell_time * np.arange(n_pts)
+        echo_time = TE - (dwell_time * n_pts / 2)
+        time_vec_single = (time_vec_single + echo_time).astype(np.float32)
+        """
         n_shots = 3969  # 40642560/2048/5
         start_time = TE - (obs_time / 2)
         end_time = TE + (obs_time / 2)
@@ -360,11 +367,16 @@ def dc_adjoint(obs_file: str | np.ndarray, traj_file: str, coil_compress: str | 
         readout_time = readout_time.reshape(-1, 1)
         readout_time = readout_time[:kspace_loc.shape[0]]
         readout_time = readout_time.squeeze()
+    
+        """
+
         orc_fft = ORCFFTWrapper(
             nufft,
             field_map=b0_map_aligned,
-            time_vec=readout_time,
-            mask=b0_map_aligned != 0
+            time_vec=time_vec_single,
+            mask=b0_map_aligned != 0,
+            n_bins=100,
+            num_interpolators=10
         )
         log.info("Getting the DC adjoint : ORC")
         dc_adjoint = orc_fft.adj_op(kspace_data)
