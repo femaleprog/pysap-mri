@@ -330,9 +330,12 @@ def dc_adjoint(obs_file: str | np.ndarray, traj_file: str, coil_compress: str | 
 
     log.info("Getting the DC Adjoint")
     if orc and b0_map_file:
+
         log.info("Applying B0 off-resonance correction with MRI Fourier Operator")
+
         b0_map_nii = nib.load(b0_map_file)
         b0_map = b0_map_nii.get_fdata().astype(np.float32)
+
         # import scipy.io
         # mat_data = scipy.io.loadmat('B0map_matlab.mat')
         # b0_map = mat_data['B0map'].astype(np.float32)
@@ -342,22 +345,26 @@ def dc_adjoint(obs_file: str | np.ndarray, traj_file: str, coil_compress: str | 
         b0_map_interp = zoom(b0_map, zoom_factors, order=1)
         b0_map_aligned = np.flip(b0_map_interp, (0, 2))
         nufft = get_operator("gpunufft")(
-            samples=2 * np.pi * kspace_loc,
+            samples=kspace_loc,
             shape=(384, 384, 208),
-            n_coils=32,
+            n_coils=10,
             density=True,
             smaps=smaps,
         )
 
         TE = 20e-3
-        obs_time = 20.48e-3
-        n_pts = 10240
-        n_shots = kspace_loc[0]
-        dwell_time = traj_reader.keywords['raster_time'] / \
+
+        dwell_time = traj_reader.keywords['raster_time']*1e-6 / \
             data_header["oversampling_factor"]
-        time_vec_single = dwell_time * np.arange(n_pts)
-        echo_time = TE - (dwell_time * n_pts / 2)
-        time_vec_single = (time_vec_single + echo_time).astype(np.float32)
+
+        # number of points acquired per shot
+        nb_adc_samples = 10240
+
+        # time vector for one shot
+        time_vec_single = dwell_time * np.arange(nb_adc_samples)
+        echo_shift = TE - (dwell_time * nb_adc_samples/2)
+        time_vec_single = time_vec_single + echo_shift
+
         """
         n_shots = 3969  # 40642560/2048/5
         start_time = TE - (obs_time / 2)
@@ -375,8 +382,8 @@ def dc_adjoint(obs_file: str | np.ndarray, traj_file: str, coil_compress: str | 
             field_map=b0_map_aligned,
             time_vec=time_vec_single,
             mask=b0_map_aligned != 0,
-            n_bins=100,
-            num_interpolators=10
+            n_bins="auto",
+            num_interpolators="auto"
         )
         log.info("Getting the DC adjoint : ORC")
         dc_adjoint = orc_fft.adj_op(kspace_data)
