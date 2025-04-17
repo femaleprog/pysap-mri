@@ -336,9 +336,9 @@ def dc_adjoint(obs_file: str | np.ndarray, traj_file: str, coil_compress: str | 
         b0_map_nii = nib.load(b0_map_file)
         b0_map = b0_map_nii.get_fdata().astype(np.float32)
 
-        # import scipy.io
-        # mat_data = scipy.io.loadmat('B0map_matlab.mat')
-        # b0_map = mat_data['B0map'].astype(np.float32)
+        #import scipy.io
+        #mat_data = scipy.io.loadmat('B0map_matlab.mat')
+        #b0_map = mat_data['B0map'].astype(np.float32)
         current_shape = b0_map.shape
         target_shape = (384, 384, 208)
         zoom_factors = tuple(t/c for t, c in zip(target_shape, current_shape))
