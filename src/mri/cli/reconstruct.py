@@ -33,88 +33,6 @@ save_data_hydra = lambda x, * \
     args, **kwargs: save_data(get_outdir_path(x), *args, **kwargs)
 
 
-def visualize_map(B0map, slice_index=None, vmin=-100, vmax=100, subtitle=None):
-    """
-    Function to visualize B0map in three views: Axial, Sagittal, and Coronal, with fixed scaling.
-
-    Parameters:
-        B0map (numpy.ndarray): 3D array representing the B0 field map.
-        slice_index (int, optional): Index of the slice to display. Defaults to the middle slice.
-        vmin (float): Minimum value for colormap normalization (fixed scale for comparison).
-        vmax (float): Maximum value for colormap normalization (fixed scale for comparison).
-        subtitle (str, optional): Title for the entire figure.
-    """
-    if slice_index is None:
-        slice_index = B0map.shape[2] // 2  # Default to middle slice
-
-    fig, axes = plt.subplots(1, 3, figsize=(14, 5), gridspec_kw={
-                             'width_ratios': [1, 1, 1]})
-
-    # Define colormap and normalization for the colorbar
-    norm = mcolors.Normalize(vmin=vmin, vmax=vmax)
-    cmap = cm.get_cmap('viridis')
-
-    # **Axial View**
-    ax = axes[0]
-    axial = B0map[:, :, slice_index]
-    ax.imshow(np.rot90(axial, 2, (1, 0)), origin='lower',
-              vmin=vmin, vmax=vmax, cmap=cmap)
-    ax.set_title('Axial')
-
-    # **Sagittal View**
-    ax = axes[1]
-    sagittal = B0map[:, slice_index, :]
-    rotated_sagittal = np.fliplr(np.rot90(sagittal, 1, (1, 0)))
-    ax.imshow(rotated_sagittal, origin='lower',
-              vmin=vmin, vmax=vmax, cmap=cmap)
-    ax.set_title('Sagittal')
-
-    # **Coronal View**
-    ax = axes[2]
-    coronal = B0map[slice_index, :, :]
-    rotated_coronal = np.fliplr(np.rot90(coronal, 1, (1, 0)))
-    ax.imshow(rotated_coronal, origin='lower', vmin=vmin, vmax=vmax, cmap=cmap)
-    ax.set_title('Coronal')
-
-    # Adjust layout to avoid overlap
-    plt.subplots_adjust(right=0.85)
-
-    # **Colorbar**
-    cbar_ax = fig.add_axes([0.88, 0.15, 0.02, 0.7])
-    fig.colorbar(cm.ScalarMappable(norm=norm, cmap=cmap),
-                 cax=cbar_ax).set_label("")
-
-    # Title for the entire figure
-    plt.suptitle(subtitle)
-    plt.show()
-
-
-def show_3_planes(volume, save_path, title="Volume", cmap='gray'):
-    import matplotlib.pyplot as plt
-    import os
-
-    x, y, z = volume.shape
-    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
-
-    axes[0].imshow(volume[:, :, z // 2], cmap=cmap)
-    axes[0].set_title("Axial")
-
-    axes[1].imshow(volume[:, y // 2, :], cmap=cmap)
-    axes[1].set_title("Coronal")
-
-    axes[2].imshow(volume[x // 2, :, :], cmap=cmap)
-    axes[2].set_title("Sagittal")
-
-    for ax in axes:
-        ax.axis("off")
-    fig.suptitle(title)
-    plt.tight_layout()
-
-    # Save before showing
-    plt.savefig(save_path)
-    print(f"✅ Saved: {os.path.abspath(save_path)}")
-
-
 def resample_b0_map(b0_map, target_shape):
     """Resample B0 map to match target image shape."""
     current_shape = b0_map.shape
@@ -268,15 +186,7 @@ def dc_adjoint(obs_file: str | np.ndarray, traj_file: str, coil_compress: str | 
         if kspace_loc.max() > 0.5 or kspace_loc.min() < 0.5:
             kspace_loc[np.where(kspace_loc < -0.5)] = -0.5
             kspace_loc[np.where(kspace_loc > 0.5)] = 0.5
-        """    log.warn(
-                "K-space locations are above the unity range, discarding the outlier data")
-            if data_header["type"] == "retro_recon":
-                kspace_loc = discard_frequency_outliers(kspace_loc)
-                kspace_data = np.squeeze(raw_data)
-            else:
-                kspace_loc, kspace_data = discard_frequency_outliers(
-                    kspace_loc, kspace_data)
-        """
+
         with open(reprocessed_file, 'wb') as f:
             pkl.dump({
                 'kspace_data': kspace_data,
@@ -336,9 +246,9 @@ def dc_adjoint(obs_file: str | np.ndarray, traj_file: str, coil_compress: str | 
         b0_map_nii = nib.load(b0_map_file)
         b0_map = b0_map_nii.get_fdata().astype(np.float32)
 
-        #import scipy.io
-        #mat_data = scipy.io.loadmat('B0map_matlab.mat')
-        #b0_map = mat_data['B0map'].astype(np.float32)
+        # import scipy.io
+        # mat_data = scipy.io.loadmat('B0map_matlab.mat')
+        # b0_map = mat_data['B0map'].astype(np.float32)
         current_shape = b0_map.shape
         target_shape = (384, 384, 208)
         zoom_factors = tuple(t/c for t, c in zip(target_shape, current_shape))
@@ -364,18 +274,6 @@ def dc_adjoint(obs_file: str | np.ndarray, traj_file: str, coil_compress: str | 
         time_vec_single = dwell_time * np.arange(nb_adc_samples)
         echo_shift = TE - (dwell_time * nb_adc_samples/2)
         time_vec_single = time_vec_single + echo_shift
-
-        """
-        n_shots = 3969  # 40642560/2048/5
-        start_time = TE - (obs_time / 2)
-        end_time = TE + (obs_time / 2)
-        readout_time_single = np.linspace(start_time, end_time, num=n_pts)
-        readout_time = np.tile(readout_time_single, (n_shots, 1))
-        readout_time = readout_time.reshape(-1, 1)
-        readout_time = readout_time[:kspace_loc.shape[0]]
-        readout_time = readout_time.squeeze()
-    
-        """
 
         orc_fft = ORCFFTWrapper(
             nufft,
